@@ -1,5 +1,4 @@
 import express, { Request, Response } from "express";
-import { createServer } from "http";
 import cors from "cors";
 import { WebSocketServer } from "ws";
 const setupWSConnection = require("y-websocket/bin/utils").setupWSConnection;
