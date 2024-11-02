@@ -1,6 +1,7 @@
 {
     "scripts": {
-        "start": "ts-node ./src/server.ts"
+        "_comment": "previous method using server file: ts-node ./src/server.ts",
+        "start": "HOST=localhost PORT=1234 npx y-websocket"
     },
     "devDependencies": {
         "@types/cors": "^2.8.17",
