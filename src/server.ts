@@ -49,12 +49,13 @@ httpServer.on("upgrade", (request, socket, head) => {
     }
 });
 
-// In-memory storage for each room
+// In-memory storage
 interface RoomData {
     simpleIDCounter: number;
     simpleIDtoClientIDMap: Record<number, number>;
     accessListSimpleID: Set<number>;
     accessListClientID: Set<number>;
+    instructorFile: string;
 }
 const rooms: Record<string, RoomData> = {};
 
@@ -68,6 +69,7 @@ function getRoomData(roomId: string): RoomData {
             simpleIDtoClientIDMap: {},
             accessListSimpleID: new Set<number>(),
             accessListClientID: new Set<number>(),
+            instructorFile: "",
         };
     }
     return rooms[roomId];
@@ -111,7 +113,18 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
     ws.on("message", (message: string) => {
         try {
             const { type, payload } = JSON.parse(message);
-            const { roomId, simpleID, clientID, targetSimpleID } = payload;
+            const {
+                roomId,
+                simpleID,
+                clientID,
+                targetSimpleID,
+                instructorFile,
+            } = payload;
+
+            if (!roomId) {
+                // Ignore messages without a roomId
+                return;
+            }
             const roomData = getRoomData(roomId);
 
             console.log("Received message: ", type, payload);
@@ -204,6 +217,24 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                         `Revoked access for simpleID: ${targetSimpleID} in room: ${roomId}`
                     );
                     sendAccessLists(roomId);
+                    break;
+
+                case "setInstructorFile":
+                    // Set the current instructor file for the specified room
+                    roomData.instructorFile = instructorFile;
+                    break;
+
+                case "requestInstructorFile":
+                    // Send the current instructor file to the client
+                    ws.send(
+                        JSON.stringify({
+                            type: "instructorFileResponse",
+                            payload: {
+                                roomId,
+                                instructorFile: roomData.instructorFile,
+                            },
+                        })
+                    );
                     break;
 
                 default:
