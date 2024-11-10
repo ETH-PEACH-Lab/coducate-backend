@@ -237,6 +237,32 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                     );
                     break;
 
+                case "requestTerminalOpen":
+                    // Notify the clients to open the terminal
+                    controlWebSocketServer.clients.forEach((client) => {
+                        client.send(
+                            JSON.stringify({
+                                type: "terminalOpened",
+                                payload: { roomId },
+                            })
+                        );
+                    });
+                    console.log("Sent terminal opened message");
+                    break;
+
+                case "requestTerminalClose":
+                    // Notify the clients to close the terminal
+                    controlWebSocketServer.clients.forEach((client) => {
+                        client.send(
+                            JSON.stringify({
+                                type: "terminalClosed",
+                                payload: { roomId },
+                            })
+                        );
+                    });
+                    console.log("Sent terminal closed message");
+                    break;
+
                 default:
                     // Ignore unknown message types
                     break;
