@@ -119,6 +119,7 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                 clientID,
                 targetSimpleID,
                 instructorFile,
+                increase,
             } = payload;
 
             if (!roomId) {
@@ -261,6 +262,23 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                         );
                     });
                     console.log("Sent terminal closed message");
+                    break;
+
+                case "requestFontSizeChange":
+                    // Notify the clients to change the font size
+                    controlWebSocketServer.clients.forEach((client) => {
+                        client.send(
+                            JSON.stringify({
+                                type: "fontSizeChanged",
+                                payload: {
+                                    roomId,
+                                    targetSimpleID: 1,
+                                    increase,
+                                },
+                            })
+                        );
+                    });
+                    console.log("Sent font size change message");
                     break;
 
                 default:
