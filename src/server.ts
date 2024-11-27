@@ -57,7 +57,7 @@ interface RoomData {
     accessListClientID: Set<number>;
     instructorSimpleID: number | null;
     instructorFile: string;
-    password: string;
+    passwordHash: string;
     salt: string;
 }
 const rooms: Record<string, RoomData> = {};
@@ -74,7 +74,7 @@ function getRoomData(roomId: string): RoomData {
             accessListClientID: new Set<number>(),
             instructorSimpleID: null,
             instructorFile: "",
-            password: "",
+            passwordHash: "",
             salt: "",
         };
     }
@@ -110,17 +110,24 @@ function sendAccessLists(roomId: string) {
 }
 
 /**
- * Validates a password using PBKDF2 with the salt and stored hash
+ * Helper function to generate a random salt
  */
-async function validatePassword(
-    providedPassword: string,
-    storedPassword: string,
-    salt: string
-): Promise<boolean> {
+function generateSalt(length: number): string {
+    const array = new Uint8Array(length);
+    crypto.getRandomValues(array);
+    return Array.from(array)
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+}
+
+/**
+ * Helper function to hash a password using PBKDF2
+ */
+async function hashPassword(password: string, salt: string): Promise<string> {
     const encoder = new TextEncoder();
     const passwordKey = await crypto.subtle.importKey(
         "raw",
-        encoder.encode(providedPassword),
+        encoder.encode(password),
         { name: "PBKDF2" },
         false,
         ["deriveBits"]
@@ -137,10 +144,20 @@ async function validatePassword(
         256 // Output length in bits
     );
 
-    const derivedHash = Array.from(new Uint8Array(derivedBits))
+    return Array.from(new Uint8Array(derivedBits))
         .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join(""); // Convert derived bits to hex string
+        .join("");
+}
 
+/**
+ * Validates a password using PBKDF2 with the salt and stored hash
+ */
+async function validatePassword(
+    providedPassword: string,
+    storedPassword: string,
+    salt: string
+): Promise<boolean> {
+    const derivedHash = await hashPassword(providedPassword, salt);
     return derivedHash === storedPassword;
 }
 
@@ -161,7 +178,6 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                 targetSimpleID,
                 instructorFile,
                 password,
-                salt,
                 increase,
             } = payload;
 
@@ -176,13 +192,16 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
 
             switch (type) {
                 case "setRoomPassword":
-                    if (!password || !salt) {
+                    if (!password) {
                         console.log("Invalid setRoomPassword payload.");
                         return;
                     }
 
-                    roomData.password = password;
+                    const salt = generateSalt(16);
+                    const passwordHash = await hashPassword(password, salt);
+
                     roomData.salt = salt;
+                    roomData.passwordHash = passwordHash;
 
                     ws.send(
                         JSON.stringify({
@@ -200,10 +219,11 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                     roomData.simpleIDtoClientIDMap[Number(newSimpleID)] =
                         Number(clientID);
 
-                    if (password && roomData.password && roomData.salt) {
-                        const isValidPassword = await validatePassword(
+                    let isValidPassword = false;
+                    if (password && roomData.passwordHash && roomData.salt) {
+                        isValidPassword = await validatePassword(
                             password,
-                            roomData.password,
+                            roomData.passwordHash,
                             roomData.salt
                         );
 
@@ -212,14 +232,14 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                             console.log("Instructor simpleID", newSimpleID);
                         }
                     }
+
                     ws.send(
                         JSON.stringify({
                             type: "assignSimpleID",
                             payload: {
                                 roomId,
                                 newSimpleID,
-                                isClientInstructor:
-                                    roomData.instructorSimpleID === newSimpleID,
+                                isClientInstructor: isValidPassword,
                             },
                         })
                     );
@@ -250,30 +270,26 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                         `Registered client with simpleID: ${simpleID} and clientID: ${clientID} in room: ${roomId}`
                     );
 
-                    if (password && roomData.password && roomData.salt) {
+                    if (password && roomData.passwordHash && roomData.salt) {
                         const isValidPassword = await validatePassword(
                             password,
-                            roomData.password,
+                            roomData.passwordHash,
                             roomData.salt
                         );
 
-                        console.log("isValidPassword", isValidPassword);
-
                         if (isValidPassword) {
                             roomData.instructorSimpleID = simpleID;
-
-                            ws.send(
-                                JSON.stringify({
-                                    type: "instructorStatus",
-                                    payload: {
-                                        roomId,
-                                        isClientInstructor:
-                                            roomData.instructorSimpleID ===
-                                            simpleID,
-                                    },
-                                })
-                            );
                         }
+
+                        ws.send(
+                            JSON.stringify({
+                                type: "instructorStatus",
+                                payload: {
+                                    roomId,
+                                    isClientInstructor: isValidPassword,
+                                },
+                            })
+                        );
                     }
                     sendAccessLists(roomId);
                     break;
@@ -339,7 +355,7 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                             type: "instructorFileResponse",
                             payload: {
                                 roomId,
-                                instructorFile: roomData.instructorFile,
+                                instructorFileServer: roomData.instructorFile,
                             },
                         })
                     );
