@@ -55,7 +55,6 @@ interface RoomData {
     simpleIDtoClientIDMap: Record<number, number>;
     accessListSimpleID: Set<number>;
     accessListClientID: Set<number>;
-    instructorSimpleID: number | null;
     instructorFile: string;
     passwordHash: string;
     salt: string;
@@ -72,7 +71,6 @@ function getRoomData(roomId: string): RoomData {
             simpleIDtoClientIDMap: {},
             accessListSimpleID: new Set<number>(),
             accessListClientID: new Set<number>(),
-            instructorSimpleID: null,
             instructorFile: "",
             passwordHash: "",
             salt: "",
@@ -172,6 +170,37 @@ async function validatePassword(
     return derivedHash === storedPassword;
 }
 
+// Endpoint to verify a password
+app.post("/verify-password", async (req, res) => {
+    const { password, roomId } = req.body;
+
+    // Check if the room exists
+    if (!rooms[roomId]) {
+        res.status(404).json({ success: false, message: "Room not found" });
+        return;
+    }
+
+    const roomData = getRoomData(roomId);
+    const isValidPassword = await validatePassword(
+        password,
+        roomData.passwordHash,
+        roomData.salt
+    );
+
+    if (isValidPassword) {
+        res.status(200).json({ success: true });
+    } else {
+        res.status(401).json({ success: false, message: "Invalid password" });
+    }
+});
+
+// Endpoint to verify if room exists
+app.post("/verify-room", (req, res) => {
+    const { roomId } = req.body;
+    const roomExists = rooms[roomId] !== undefined;
+    res.json({ success: roomExists });
+});
+
 // Yjs WebSocket connection setup
 yWebSocketServer.on("connection", (ws, request) => {
     setupWSConnection(ws, request); // Setup Yjs connection
@@ -239,25 +268,11 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                     console.log(`Password set for room ${roomId}`);
                     break;
 
-                case "requestSimpleID":
+                case "requestSimpleID": {
                     // Assign a new simpleID to the client in the specified room
                     const newSimpleID = roomData.simpleIDCounter++;
                     roomData.simpleIDtoClientIDMap[Number(newSimpleID)] =
                         Number(clientID);
-
-                    let isValidPassword = false;
-                    if (password && roomData.passwordHash && roomData.salt) {
-                        isValidPassword = await validatePassword(
-                            password,
-                            roomData.passwordHash,
-                            roomData.salt
-                        );
-
-                        if (isValidPassword) {
-                            roomData.instructorSimpleID = newSimpleID;
-                            console.log("Instructor simpleID", newSimpleID);
-                        }
-                    }
 
                     ws.send(
                         JSON.stringify({
@@ -265,7 +280,6 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                             payload: {
                                 roomId,
                                 newSimpleID,
-                                isClientInstructor: isValidPassword,
                             },
                         })
                     );
@@ -274,6 +288,7 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                     );
                     sendAccessLists(roomId);
                     break;
+                }
 
                 case "registerClient":
                     // Register client with simpleID and clientID in the specified room
@@ -295,28 +310,6 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                     console.log(
                         `Registered client with simpleID: ${simpleID} and clientID: ${clientID} in room: ${roomId}`
                     );
-
-                    if (password && roomData.passwordHash && roomData.salt) {
-                        const isValidPassword = await validatePassword(
-                            password,
-                            roomData.passwordHash,
-                            roomData.salt
-                        );
-
-                        if (isValidPassword) {
-                            roomData.instructorSimpleID = simpleID;
-                        }
-
-                        ws.send(
-                            JSON.stringify({
-                                type: "instructorStatus",
-                                payload: {
-                                    roomId,
-                                    isClientInstructor: isValidPassword,
-                                },
-                            })
-                        );
-                    }
                     sendAccessLists(roomId);
                     break;
 
