@@ -82,7 +82,21 @@ function getRoomData(roomId: string): RoomData {
 }
 
 /**
- * Helper function to send accessLists to all clients in a room
+ * Helper function to send messages to all clients in a specific room
+ */
+function sendToRoom(roomId: string, message: object) {
+    controlWebSocketServer.clients.forEach((client) => {
+        if (
+            (client as any).roomId === roomId &&
+            client.readyState === WebSocket.OPEN
+        ) {
+            client.send(JSON.stringify(message));
+        }
+    });
+}
+
+/**
+ * Function to send accessLists to all clients in a room
  */
 function sendAccessLists(roomId: string) {
     const roomData = getRoomData(roomId);
@@ -92,18 +106,15 @@ function sendAccessLists(roomId: string) {
     console.log("Sending access list", accessListSimpleIDAsArray);
     console.log("Sending access list", accessListClientIDAsArray);
 
-    controlWebSocketServer.clients.forEach((client) => {
-        client.send(
-            JSON.stringify({
-                type: "accessListResponse",
-                payload: {
-                    roomId,
-                    accessListSimpleIDAsArray,
-                    accessListClientIDAsArray,
-                },
-            })
-        );
+    sendToRoom(roomId, {
+        type: "accessListResponse",
+        payload: {
+            roomId,
+            accessListSimpleIDAsArray,
+            accessListClientIDAsArray,
+        },
     });
+
     console.log(
         `Sent access list for room: ${roomId} with simpleIDs: ${accessListSimpleIDAsArray}`
     );
@@ -167,7 +178,21 @@ yWebSocketServer.on("connection", (ws, request) => {
 });
 
 // Control WebSocket connection setup
-controlWebSocketServer.on("connection", (ws: WebSocket) => {
+controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
+    // Extract roomId from query parameters
+    const url = new URL(request.url || "/", `http://${request.headers.host}`);
+    const roomIdUrl = url.searchParams.get("roomId");
+
+    if (!roomIdUrl) {
+        ws.close(4000, "Room ID is required");
+        return;
+    }
+
+    // Associate the WebSocket (client) with the roomId
+    (ws as any).roomId = roomIdUrl;
+
+    console.log(`Client connected to room: ${roomIdUrl}`);
+
     ws.on("message", async (message: string) => {
         try {
             const { type, payload } = JSON.parse(message);
@@ -181,7 +206,8 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                 increase,
             } = payload;
 
-            if (!roomId) {
+            // Ensure roomId is in payload for room-specific actions
+            if (!roomId || roomId !== roomIdUrl) {
                 // Ignore messages without a roomId
                 return;
             }
@@ -362,72 +388,66 @@ controlWebSocketServer.on("connection", (ws: WebSocket) => {
                     break;
 
                 case "requestTerminalOpen":
-                    // Notify the clients to open the terminal
-                    controlWebSocketServer.clients.forEach((client) => {
-                        client.send(
-                            JSON.stringify({
-                                type: "terminalOpened",
-                                payload: { roomId },
-                            })
-                        );
+                    // Notify the clients in the room to open the terminal
+                    sendToRoom(roomId, {
+                        type: "terminalOpened",
+                        payload: { roomId },
                     });
-                    console.log("Sent terminal opened message");
+                    console.log(
+                        "Sent terminal opened message to room:",
+                        roomId
+                    );
                     break;
 
                 case "requestTerminalClose":
-                    // Notify the clients to close the terminal
-                    controlWebSocketServer.clients.forEach((client) => {
-                        client.send(
-                            JSON.stringify({
-                                type: "terminalClosed",
-                                payload: { roomId },
-                            })
-                        );
+                    // Notify the clients in the room to close the terminal
+                    sendToRoom(roomId, {
+                        type: "terminalClosed",
+                        payload: { roomId },
                     });
-                    console.log("Sent terminal closed message");
+                    console.log(
+                        "Sent terminal closed message to room:",
+                        roomId
+                    );
                     break;
 
                 case "requestExplorerOpen":
-                    // Notify the clients to open the explorer
-                    controlWebSocketServer.clients.forEach((client) => {
-                        client.send(
-                            JSON.stringify({
-                                type: "explorerOpened",
-                                payload: { roomId },
-                            })
-                        );
+                    // Notify the clients in the room to open the explorer
+                    sendToRoom(roomId, {
+                        type: "explorerOpened",
+                        payload: { roomId },
                     });
-                    console.log("Sent explorer opened message");
+                    console.log(
+                        "Sent explorer opened message to room:",
+                        roomId
+                    );
                     break;
 
                 case "requestExplorerClose":
-                    // Notify the clients to close the explorer
-                    controlWebSocketServer.clients.forEach((client) => {
-                        client.send(
-                            JSON.stringify({
-                                type: "explorerClosed",
-                                payload: { roomId },
-                            })
-                        );
+                    // Notify the clients in the room to close the explorer
+                    sendToRoom(roomId, {
+                        type: "explorerClosed",
+                        payload: { roomId },
                     });
-                    console.log("Sent explorer closed message");
+                    console.log(
+                        "Sent explorer closed message to room:",
+                        roomId
+                    );
                     break;
 
                 case "requestFontSizeChange":
-                    // Notify the clients to change the font size
-                    controlWebSocketServer.clients.forEach((client) => {
-                        client.send(
-                            JSON.stringify({
-                                type: "fontSizeChanged",
-                                payload: {
-                                    roomId,
-                                    targetSimpleID: 1,
-                                    increase,
-                                },
-                            })
-                        );
+                    // Notify the clients in the room to change the font size
+                    sendToRoom(roomId, {
+                        type: "fontSizeChanged",
+                        payload: {
+                            roomId,
+                            increase,
+                        },
                     });
-                    console.log("Sent font size change message");
+                    console.log(
+                        "Sent font size change message to room:",
+                        roomId
+                    );
                     break;
 
                 default:
