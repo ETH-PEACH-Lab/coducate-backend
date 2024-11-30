@@ -58,6 +58,8 @@ interface RoomData {
     instructorFile: string;
     passwordHash: string;
     salt: string;
+    taskDescriptionPath: string;
+    learningGoalsPath: string;
 }
 const rooms: Record<string, RoomData> = {};
 
@@ -74,6 +76,8 @@ function getRoomData(roomId: string): RoomData {
             instructorFile: "",
             passwordHash: "",
             salt: "",
+            taskDescriptionPath: "",
+            learningGoalsPath: "",
         };
     }
     return rooms[roomId];
@@ -232,6 +236,8 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                 targetSimpleID,
                 instructorFile,
                 password,
+                taskDescriptionPath,
+                learningGoalsPath,
                 increase,
             } = payload;
 
@@ -246,7 +252,7 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
             console.log("Received message: ", type, payload);
 
             switch (type) {
-                case "setRoomPassword":
+                case "setSessionData":
                     if (!password) {
                         console.log("Invalid setRoomPassword payload.");
                         return;
@@ -257,15 +263,17 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
 
                     roomData.salt = salt;
                     roomData.passwordHash = passwordHash;
+                    roomData.taskDescriptionPath = taskDescriptionPath;
+                    roomData.learningGoalsPath = learningGoalsPath;
 
                     ws.send(
                         JSON.stringify({
-                            type: "roomPasswordSetResponse",
+                            type: "sessionDataSetResponse",
                             payload: { roomId },
                         })
                     );
 
-                    console.log(`Password set for room ${roomId}`);
+                    console.log(`Set session data for room: ${roomId}`);
                     break;
 
                 case "requestSimpleID": {
@@ -276,10 +284,13 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
 
                     ws.send(
                         JSON.stringify({
-                            type: "assignSimpleID",
+                            type: "requestSimpleIDResponse",
                             payload: {
                                 roomId,
                                 newSimpleID,
+                                taskDescriptionPath:
+                                    roomData.taskDescriptionPath,
+                                learningGoalsPath: roomData.learningGoalsPath,
                             },
                         })
                     );
@@ -310,6 +321,19 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                     console.log(
                         `Registered client with simpleID: ${simpleID} and clientID: ${clientID} in room: ${roomId}`
                     );
+
+                    ws.send(
+                        JSON.stringify({
+                            type: "sessionDataResponse",
+                            payload: {
+                                roomId,
+                                taskDescriptionPath:
+                                    roomData.taskDescriptionPath,
+                                learningGoalsPath: roomData.learningGoalsPath,
+                            },
+                        })
+                    );
+
                     sendAccessLists(roomId);
                     break;
 
