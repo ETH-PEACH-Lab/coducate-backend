@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 const setupWSConnection = require("y-websocket/bin/utils").setupWSConnection;
 
 // CORS Configuration
-export const allowedOrigins = ["http://localhost:5173"];
+export const allowedOrigins = ["http://localhost:3000"];
 
 const app = express();
 app.use(
