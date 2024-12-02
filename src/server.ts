@@ -338,51 +338,105 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                     break;
 
                 case "grantAccess":
-                    // Grant access to a given simpleID in the specified room
-                    roomData.accessListSimpleID.add(Number(targetSimpleID));
-                    roomData.accessListClientID.add(
-                        Number(
-                            roomData.simpleIDtoClientIDMap[
-                                Number(targetSimpleID)
-                            ]
-                        )
-                    );
+                    // Check if access should be granted for all clients
+                    if (targetSimpleID === null) {
+                        roomData.accessListSimpleID = new Set(
+                            Object.keys(roomData.simpleIDtoClientIDMap).map(
+                                (simpleID) => Number(simpleID)
+                            )
+                        );
+                        roomData.accessListClientID = new Set(
+                            Object.values(roomData.simpleIDtoClientIDMap).map(
+                                (clientID) => Number(clientID)
+                            )
+                        );
 
-                    console.log(
-                        "client ID from Map",
-                        roomData.simpleIDtoClientIDMap[targetSimpleID]
-                    );
-                    ws.send(
-                        JSON.stringify({
-                            type: "accessGranted",
-                            payload: { roomId, simpleID: targetSimpleID },
-                        })
-                    );
-                    console.log(
-                        `Granted access to simpleID: ${targetSimpleID} in room: ${roomId}`
-                    );
+                        ws.send(
+                            JSON.stringify({
+                                type: "accessGranted",
+                                payload: {
+                                    roomId,
+                                    simpleID: Array.from(
+                                        roomData.accessListSimpleID
+                                    ),
+                                },
+                            })
+                        );
+                        console.log(
+                            `Granted access for all clients in room: ${roomId}`
+                        );
+                    } else {
+                        // Check if the simpleID is valid
+                        if (!roomData.simpleIDtoClientIDMap[targetSimpleID]) {
+                            console.log(
+                                `SimpleID ${targetSimpleID} not found in room ${roomId}`
+                            );
+                            return;
+                        }
+
+                        // Grant access to a given simpleID in the specified room
+                        roomData.accessListSimpleID.add(Number(targetSimpleID));
+                        roomData.accessListClientID.add(
+                            Number(
+                                roomData.simpleIDtoClientIDMap[
+                                    Number(targetSimpleID)
+                                ]
+                            )
+                        );
+
+                        console.log(
+                            "client ID from Map",
+                            roomData.simpleIDtoClientIDMap[targetSimpleID]
+                        );
+                        ws.send(
+                            JSON.stringify({
+                                type: "accessGranted",
+                                payload: { roomId, simpleID: targetSimpleID },
+                            })
+                        );
+                        console.log(
+                            `Granted access to simpleID: ${targetSimpleID} in room: ${roomId}`
+                        );
+                    }
                     sendAccessLists(roomId);
                     break;
 
                 case "revokeAccess":
-                    // Revoke access for a given simpleID in the specified room
-                    roomData.accessListSimpleID.delete(Number(targetSimpleID));
-                    roomData.accessListClientID.delete(
-                        Number(
-                            roomData.simpleIDtoClientIDMap[
-                                Number(targetSimpleID)
-                            ]
-                        )
-                    );
-                    ws.send(
-                        JSON.stringify({
-                            type: "accessRevoked",
-                            payload: { roomId, simpleID: targetSimpleID },
-                        })
-                    );
-                    console.log(
-                        `Revoked access for simpleID: ${targetSimpleID} in room: ${roomId}`
-                    );
+                    // Check if access should be revoked for all clients
+                    if (targetSimpleID === null) {
+                        roomData.accessListSimpleID.clear();
+                        roomData.accessListClientID.clear();
+                        ws.send(
+                            JSON.stringify({
+                                type: "accessRevoked",
+                                payload: { roomId, simpleID: null },
+                            })
+                        );
+                        console.log(
+                            `Revoked access for all clients in room: ${roomId}`
+                        );
+                    } else {
+                        // Revoke access for a given simpleID in the specified room
+                        roomData.accessListSimpleID.delete(
+                            Number(targetSimpleID)
+                        );
+                        roomData.accessListClientID.delete(
+                            Number(
+                                roomData.simpleIDtoClientIDMap[
+                                    Number(targetSimpleID)
+                                ]
+                            )
+                        );
+                        ws.send(
+                            JSON.stringify({
+                                type: "accessRevoked",
+                                payload: { roomId, simpleID: targetSimpleID },
+                            })
+                        );
+                        console.log(
+                            `Revoked access for simpleID: ${targetSimpleID} in room: ${roomId}`
+                        );
+                    }
                     sendAccessLists(roomId);
                     break;
 
