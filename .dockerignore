@@ -1,0 +1,15 @@
+.git
+.vscode
+.dockerignore
+.gitignore
+.env
+config
+build
+dist
+package-lock.json
+node_modules
+docker-compose.yaml
+Dockerfile
+README.md
+LICENSE
+.DS_Store
