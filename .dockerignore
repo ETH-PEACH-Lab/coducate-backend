@@ -6,7 +6,6 @@
 config
 build
 dist
-package-lock.json
 node_modules
 docker-compose.yaml
 Dockerfile
