@@ -1,15 +1,32 @@
 import express from "express";
 import cors from "cors";
 import { WebSocketServer, WebSocket } from "ws";
+import dotenv from "dotenv";
+
 const setupWSConnection = require("y-websocket/bin/utils").setupWSConnection;
 
+// Load environment variables from .env file
+dotenv.config();
+
 // CORS Configuration
-export const allowedOrigins = ["http://localhost:3000"];
+export const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [];
+
+console.log("Allowed origins: ", allowedOrigins);
 
 const app = express();
 app.use(
     cors({
-        origin: allowedOrigins,
+        origin: (origin, callback) => {
+            if (
+                (typeof origin === "string" &&
+                    allowedOrigins.includes(origin)) ||
+                !origin // Allow requests with no origin (e.g., curl, Postman, etc.)
+            ) {
+                callback(null, true);
+            } else {
+                callback(new Error("Not allowed by CORS"));
+            }
+        },
         methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
         allowedHeaders: "Content-Type",
         credentials: true,
@@ -175,7 +192,7 @@ async function validatePassword(
 }
 
 // Endpoint to verify a password
-app.post("/verify-password", async (req, res) => {
+app.post("/api/verify-password", async (req, res) => {
     const { password, roomId } = req.body;
 
     // Check if the room exists
@@ -199,7 +216,7 @@ app.post("/verify-password", async (req, res) => {
 });
 
 // Endpoint to verify if room exists
-app.post("/verify-room", (req, res) => {
+app.post("/api/verify-room", (req, res) => {
     const { roomId } = req.body;
     const roomExists = rooms[roomId] !== undefined;
     res.json({ success: roomExists });
@@ -225,6 +242,13 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
     (ws as any).roomId = roomIdUrl;
 
     console.log(`Client connected to room: ${roomIdUrl}`);
+
+    // Periodically send pings to clients
+    const interval = setInterval(() => {
+        if (ws.readyState === ws.OPEN) {
+            ws.ping();
+        }
+    }, 30000); // Every 30 seconds
 
     ws.on("message", async (message: string) => {
         try {
@@ -528,5 +552,10 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
         } catch {
             // Ignore invalid messages
         }
+    });
+
+    ws.on("close", () => {
+        clearInterval(interval);
+        console.log(`Client disconnected from room: ${roomIdUrl}`);
     });
 });
