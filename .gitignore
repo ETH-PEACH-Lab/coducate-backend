@@ -1,3 +1,6 @@
+# Docker mySQL
+data/
+
 # Logs
 logs
 *.log
