@@ -10,6 +10,8 @@ RUN npm install
 
 COPY . .
 
+RUN apt-get update && apt-get install -y default-mysql-client
+
 CMD ["npm", "start"]
 
 EXPOSE 1234
