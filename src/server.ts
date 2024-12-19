@@ -160,9 +160,6 @@ async function fetchRoomData(roomId: string): Promise<RoomData | undefined> {
 /**
  * Helper function to modify room data
  */
-/**
- * Helper function to modify room data
- */
 async function modifyRoomData(
     roomId: string,
     modifier: (roomData: RoomData) => void
@@ -513,6 +510,7 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                 taskDescriptionPath,
                 learningGoalsPath,
                 increase,
+                changedTheme,
             } = payload;
 
             console.log("Received message: ", type, payload);
@@ -822,6 +820,15 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
                         "Sent font size change message to room:",
                         roomId
                     );
+                    break;
+
+                case "requestThemeChange":
+                    // Notify the clients in the room to change the theme
+                    sendToRoom(roomId, {
+                        type: "themeChanged",
+                        payload: { roomId, changedTheme },
+                    });
+                    console.log("Sent theme change message to room:", roomId);
                     break;
 
                 default:
