@@ -5,6 +5,13 @@ import { Mutex } from "async-mutex";
 import dotenv from "dotenv";
 import db from "./db";
 
+// Extend WebSocket interface to include custom properties
+interface CustomWebSocket extends WebSocket {
+    isAlive?: boolean;
+    pingTimeout?: NodeJS.Timeout;
+    roomId?: string;
+}
+
 const setupWSConnection = require("y-websocket/bin/utils").setupWSConnection;
 
 // Load environment variables from .env file
@@ -474,8 +481,28 @@ yWebSocketServer.on("connection", (ws, request) => {
     setupWSConnection(ws, request); // Setup Yjs connection
 });
 
+// Heartbeat function to mark a WebSocket as alive
+function heartbeat(this: CustomWebSocket) {
+    this.isAlive = true;
+}
+
+// Interval to send pings and check client responsiveness
+const interval = setInterval(() => {
+    controlWebSocketServer.clients.forEach((ws) => {
+        const customWs = ws as CustomWebSocket;
+
+        if (customWs.isAlive === false) {
+            console.log("Terminating unresponsive client");
+            return customWs.terminate();
+        }
+
+        customWs.isAlive = false;
+        customWs.ping();
+    });
+}, 30000);
+
 // Control WebSocket connection setup
-controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
+controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
     // Extract roomId from query parameters
     const url = new URL(request.url || "/", `http://${request.headers.host}`);
     const roomIdUrl = url.searchParams.get("roomId");
@@ -486,17 +513,18 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
     }
 
     // Associate the WebSocket (client) with the roomId
-    (ws as any).roomId = roomIdUrl;
+    ws.roomId = roomIdUrl;
 
+    ws.isAlive = true;
     console.log(`Client connected to room: ${roomIdUrl}`);
 
-    // Periodically send pings to clients
-    const interval = setInterval(() => {
-        if (ws.readyState === ws.OPEN) {
-            ws.ping();
-        }
-    }, 30000); // Every 30 seconds
+    // Refresh the `isAlive` status on receiving a pong
+    ws.on("pong", heartbeat.bind(ws));
 
+    // Handle connection errors
+    ws.on("error", console.error);
+
+    // Handle incoming messages
     ws.on("message", async (message: string) => {
         try {
             const { type, payload } = JSON.parse(message);
@@ -841,7 +869,11 @@ controlWebSocketServer.on("connection", (ws: WebSocket, request) => {
     });
 
     ws.on("close", () => {
-        clearInterval(interval);
         console.log(`Client disconnected from room: ${roomIdUrl}`);
     });
+});
+
+// Cleanup interval on server shutdown
+controlWebSocketServer.on("close", () => {
+    clearInterval(interval);
 });
