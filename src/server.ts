@@ -327,7 +327,7 @@ async function sendAccessLists(roomId: string) {
     console.log("Sending access list (clientID)", accessListClientIDAsArray);
 
     sendToRoom(roomId, {
-        type: "accessListResponse",
+        type: "access_list_response",
         payload: {
             roomId,
             accessListSimpleIDAsArray,
@@ -551,7 +551,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
             }
 
             switch (type) {
-                case "setSessionData":
+                case "set_session_data_request":
                     if (!password) {
                         console.log("Invalid setRoomPassword payload.");
                         return;
@@ -569,7 +569,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                     ws.send(
                         JSON.stringify({
-                            type: "sessionDataSetResponse",
+                            type: "set_session_data_response",
                             payload: { roomId },
                         })
                     );
@@ -577,7 +577,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     console.log(`Set session data for room: ${roomId}`);
                     break;
 
-                case "requestSimpleID": {
+                case "get_simple_id_request": {
                     // Assign a new simpleID to the client in the specified room
                     await modifyRoomData(roomId, (roomData) => {
                         const newSimpleID = roomData.simpleIDCounter++;
@@ -585,7 +585,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                         ws.send(
                             JSON.stringify({
-                                type: "requestSimpleIDResponse",
+                                type: "get_simple_id_response",
                                 payload: {
                                     roomId,
                                     newSimpleID,
@@ -606,7 +606,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     break;
                 }
 
-                case "registerClient":
+                case "register_client_request":
                     // Register client with simpleID and clientID in the specified room
                     // Delete old clientID from the access list
                     await modifyRoomData(roomId, (roomData) => {
@@ -625,7 +625,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                         ws.send(
                             JSON.stringify({
-                                type: "sessionDataResponse",
+                                type: "session_data_response",
                                 payload: {
                                     roomId,
                                     taskDescriptionPath:
@@ -644,7 +644,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     sendAccessLists(roomId);
                     break;
 
-                case "grantAccess":
+                case "grant_access_request":
                     // Check if access should be granted for all clients
                     await modifyRoomData(roomId, (roomData) => {
                         if (targetSimpleID === null) {
@@ -661,7 +661,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                             ws.send(
                                 JSON.stringify({
-                                    type: "accessGranted",
+                                    type: "grant_access_response",
                                     payload: {
                                         roomId,
                                         simpleID: Array.from(
@@ -698,7 +698,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                             ws.send(
                                 JSON.stringify({
-                                    type: "accessGranted",
+                                    type: "grant_access_response",
                                     payload: {
                                         roomId,
                                         simpleID: targetSimpleID,
@@ -714,7 +714,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     sendAccessLists(roomId);
                     break;
 
-                case "revokeAccess":
+                case "revoke_access_request":
                     // Check if access should be revoked for all clients
                     await modifyRoomData(roomId, (roomData) => {
                         if (targetSimpleID === null) {
@@ -722,7 +722,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                             roomData.accessListClientID.clear();
                             ws.send(
                                 JSON.stringify({
-                                    type: "accessRevoked",
+                                    type: "revoke_access_response",
                                     payload: { roomId, simpleID: null },
                                 })
                             );
@@ -743,7 +743,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                             );
                             ws.send(
                                 JSON.stringify({
-                                    type: "accessRevoked",
+                                    type: "revoke_access_response",
                                     payload: {
                                         roomId,
                                         simpleID: targetSimpleID,
@@ -759,7 +759,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     sendAccessLists(roomId);
                     break;
 
-                case "setInstructorFile":
+                case "set_instructor_file_request":
                     // Set the current instructor file for the specified room
                     await modifyRoomData(roomId, (roomData) => {
                         roomData.instructorFile = instructorFile;
@@ -767,7 +767,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     console.log(`Updated instructor file for room: ${roomId}`);
                     break;
 
-                case "requestInstructorFile":
+                case "get_instructor_file_request":
                     // Send the current instructor file to the client
                     const instructorFileResponse = await modifyRoomData(
                         roomId,
@@ -775,7 +775,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                             const instructorFile = roomData.instructorFile;
                             ws.send(
                                 JSON.stringify({
-                                    type: "instructorFileResponse",
+                                    type: "get_instructor_file_response",
                                     payload: {
                                         roomId,
                                         instructorFileServer: instructorFile,
@@ -787,10 +787,10 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                     break;
 
-                case "requestTerminalOpen":
+                case "open_terminal_request":
                     // Notify the clients in the room to open the terminal
                     sendToRoom(roomId, {
-                        type: "terminalOpened",
+                        type: "open_terminal_response",
                         payload: { roomId },
                     });
                     console.log(
@@ -799,10 +799,10 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     );
                     break;
 
-                case "requestTerminalClose":
+                case "close_terminal_request":
                     // Notify the clients in the room to close the terminal
                     sendToRoom(roomId, {
-                        type: "terminalClosed",
+                        type: "close_terminal_response",
                         payload: { roomId },
                     });
                     console.log(
@@ -811,10 +811,10 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     );
                     break;
 
-                case "requestExplorerOpen":
+                case "open_explorer_request":
                     // Notify the clients in the room to open the explorer
                     sendToRoom(roomId, {
-                        type: "explorerOpened",
+                        type: "open_explorer_response",
                         payload: { roomId },
                     });
                     console.log(
@@ -823,10 +823,10 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     );
                     break;
 
-                case "requestExplorerClose":
+                case "close_explorer_request":
                     // Notify the clients in the room to close the explorer
                     sendToRoom(roomId, {
-                        type: "explorerClosed",
+                        type: "close_explorer_response",
                         payload: { roomId },
                     });
                     console.log(
@@ -835,10 +835,10 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     );
                     break;
 
-                case "requestFontSizeChange":
+                case "change_font_size_request":
                     // Notify the clients in the room to change the font size
                     sendToRoom(roomId, {
-                        type: "fontSizeChanged",
+                        type: "change_font_size_response",
                         payload: {
                             roomId,
                             increase,
@@ -850,10 +850,10 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     );
                     break;
 
-                case "requestThemeChange":
+                case "change_theme_request":
                     // Notify the clients in the room to change the theme
                     sendToRoom(roomId, {
-                        type: "themeChanged",
+                        type: "change_theme_response",
                         payload: { roomId, changedTheme },
                     });
                     console.log("Sent theme change message to room:", roomId);
