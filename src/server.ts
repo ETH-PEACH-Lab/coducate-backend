@@ -97,7 +97,6 @@ interface RoomData {
 }
 const RoomDataCache: Map<string, RoomData> = new Map();
 const DirtyRooms: Set<string> = new Set();
-// const RoomLocks: Map<string, Promise<void>> = new Map();
 const RoomLocks: Map<string, Mutex> = new Map();
 
 /**
