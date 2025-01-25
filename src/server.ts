@@ -834,6 +834,24 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     );
                     break;
 
+                case "show_room_id_request":
+                    // Notify the clients in the room to show the room ID
+                    sendToRoom(roomId, {
+                        type: "show_room_id_response",
+                        payload: { roomId },
+                    });
+                    console.log("Sent show room ID message to room:", roomId);
+                    break;
+
+                case "hide_room_id_request":
+                    // Notify the clients in the room to hide the room ID
+                    sendToRoom(roomId, {
+                        type: "hide_room_id_response",
+                        payload: { roomId },
+                    });
+                    console.log("Sent hide room ID message to room:", roomId);
+                    break;
+
                 case "change_font_size_request":
                     // Notify the clients in the room to change the font size
                     sendToRoom(roomId, {
