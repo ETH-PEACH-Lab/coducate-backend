@@ -576,6 +576,29 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
                     console.log(`Set session data for room: ${roomId}`);
                     break;
 
+                case "get_task_data_request":
+                    // Send the task description and learning goals to the client
+                    const roomData = await fetchRoomData(roomId);
+                    if (!roomData) {
+                        console.log(`Room not found: ${roomId}`);
+                        return;
+                    }
+
+                    ws.send(
+                        JSON.stringify({
+                            type: "get_task_data_response",
+                            payload: {
+                                roomId,
+                                taskDescriptionPath:
+                                    roomData.taskDescriptionPath,
+                                learningGoalsPath: roomData.learningGoalsPath,
+                            },
+                        })
+                    );
+
+                    console.log(`Sent task data for room: ${roomId}`);
+                    break;
+
                 case "get_simple_id_request": {
                     // Assign a new simpleID to the client in the specified room
                     await modifyRoomData(roomId, (roomData) => {
@@ -768,21 +791,18 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "get_instructor_file_request":
                     // Send the current instructor file to the client
-                    const instructorFileResponse = await modifyRoomData(
-                        roomId,
-                        (roomData) => {
-                            const instructorFile = roomData.instructorFile;
-                            ws.send(
-                                JSON.stringify({
-                                    type: "get_instructor_file_response",
-                                    payload: {
-                                        roomId,
-                                        instructorFileServer: instructorFile,
-                                    },
-                                })
-                            );
-                        }
-                    );
+                    await modifyRoomData(roomId, (roomData) => {
+                        const instructorFile = roomData.instructorFile;
+                        ws.send(
+                            JSON.stringify({
+                                type: "get_instructor_file_response",
+                                payload: {
+                                    roomId,
+                                    instructorFileServer: instructorFile,
+                                },
+                            })
+                        );
+                    });
 
                     break;
 
