@@ -1,532 +1,81 @@
 import express from "express";
-import cors from "cors";
-import { WebSocketServer, WebSocket } from "ws";
+import { createServer } from "http";
+import { WebSocket, WebSocketServer } from "ws";
 import { Mutex } from "async-mutex";
 import dotenv from "dotenv";
-import db from "./db";
-
-// Extend WebSocket interface to include custom properties
-interface CustomWebSocket extends WebSocket {
-    isAlive?: boolean;
-    pingTimeout?: NodeJS.Timeout;
-    roomId?: string;
-}
-
 const setupWSConnection = require("y-websocket/bin/utils").setupWSConnection;
+import {
+    RoomLocks,
+    fetchRoomData,
+    getRoomData,
+    modifyRoomData,
+    cleanUpRoomCache,
+    validatePassword,
+    hashPassword,
+    generateSalt,
+} from "./rooms";
 
 // Load environment variables from .env file
 dotenv.config();
 
-// CORS Configuration
-export const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [];
-
 const app = express();
-app.use(
-    cors({
-        origin: (origin, callback) => {
-            if (
-                (typeof origin === "string" &&
-                    allowedOrigins.includes(origin)) ||
-                !origin // Allow requests with no origin (e.g., curl, Postman, etc.)
-            ) {
-                callback(null, true);
-            } else {
-                callback(new Error("Not allowed by CORS"));
-            }
-        },
-        methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
-        allowedHeaders: "Content-Type",
-        credentials: true,
-    })
-);
 app.use(express.json());
 
-// HTTP server for both WebSocket servers
-const httpServer = app.listen(1234, () => {
-    console.log(`HTTP server is listening on port 1234`);
-});
+// Create an HTTP server and attach Express
+const server = createServer(app);
 
-// Create WebSocket servers for Yjs and messages
-const yWebSocketServer = new WebSocketServer({ noServer: true });
-const controlWebSocketServer = new WebSocketServer({ noServer: true });
+// WebSocket server for Yjs
+const wssYjs = new WebSocketServer({ noServer: true });
 
-// Single upgrade handler for both WebSocket servers
-httpServer.on("upgrade", (request, socket, head) => {
-    try {
-        // Provide a fallback for request.url if it's undefined
-        const pathname = new URL(
-            request.url || "/",
-            `http://${request.headers.host}`
-        ).pathname;
+// WebSocket server for custom messages
+const wssCustom = new WebSocketServer({ noServer: true });
 
-        if (pathname.startsWith("/yjs")) {
-            yWebSocketServer.handleUpgrade(request, socket, head, (ws) => {
-                // Setup connection for the Yjs WebSocket
-                yWebSocketServer.emit("connection", ws, request);
-            });
-        } else if (pathname === "/control") {
-            controlWebSocketServer.handleUpgrade(
-                request,
-                socket,
-                head,
-                (ws) => {
-                    controlWebSocketServer.emit("connection", ws, request);
-                }
-            );
-        } else {
-            console.log(`Unrecognized WebSocket path: ${pathname}`);
-            socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
-            socket.destroy();
-        }
-    } catch (error) {
-        console.error("Error handling WebSocket upgrade:", error);
+// Both WebSocket servers share the same HTTP server
+// Requires to check the pathname to determine which websocket server needs to handle the connection
+server.on("upgrade", (request, socket, head) => {
+    const { pathname } = new URL(
+        request.url || "/",
+        `http://${request.headers.host}`
+    );
+
+    if (pathname.startsWith("/yjs")) {
+        wssYjs.handleUpgrade(request, socket, head, (ws) => {
+            wssYjs.emit("connection", ws, request);
+        });
+    } else if (pathname.startsWith("/control")) {
+        wssCustom.handleUpgrade(request, socket, head, (ws) => {
+            wssCustom.emit("connection", ws, request);
+        });
+    } else {
         socket.destroy();
     }
 });
 
-interface RoomData {
-    simpleIDCounter: number;
-    simpleIDtoClientIDMap: Record<number, number>;
-    accessListSimpleID: Set<number>;
-    accessListClientID: Set<number>;
-    instructorFile: string;
-    passwordHash: string;
-    salt: string;
-    taskDescriptionPath: string;
-    learningGoalsPath: string;
-}
-const RoomDataCache: Map<string, RoomData> = new Map();
-const DirtyRooms: Set<string> = new Set();
-const RoomLocks: Map<string, Mutex> = new Map();
+// Handle Yjs WebSocket connections
+wssYjs.on("connection", (ws, req) => {
+    // Attach Yjs WebSocket handling
+    setupWSConnection(ws, req);
+});
 
-/**
- * Helper function to get room data from cache or database
- */
-async function getRoomData(
-    roomId: string,
-    skipLock = false
-): Promise<RoomData | undefined> {
-    // Ensure the mutex for this roomId exists
-    if (!RoomLocks.has(roomId)) {
-        RoomLocks.set(roomId, new Mutex());
-    }
+// Handle custom WebSocket connections
+wssCustom.on("connection", async (ws, req) => {
+    const roomId = req.url?.split("/")?.pop();
 
-    const roomMutex = RoomLocks.get(roomId)!;
-
-    if (skipLock) {
-        // Skip acquiring the lock if the caller already holds it
-        console.log(`Skipping lock acquisition for roomId: ${roomId}`);
-        return await fetchRoomData(roomId);
-    }
-
-    // Acquire the lock
-    return await roomMutex.runExclusive(async () => {
-        return await fetchRoomData(roomId);
-    });
-}
-
-/**
- * Core logic to fetch room data from cache or database
- */
-async function fetchRoomData(roomId: string): Promise<RoomData | undefined> {
-    // Check if the room data is already in the cache
-    if (RoomDataCache.has(roomId)) {
-        console.log("Room data found in cache");
-        return RoomDataCache.get(roomId)!;
-    }
-
-    console.log("Room not found in cache, checking database");
-
-    // Fetch the room data from the database
-    const room = await db("rooms").where({ room_id: roomId }).first();
-    if (room) {
-        console.log("Room found in database");
-
-        const roomData: RoomData = {
-            simpleIDCounter: room.simple_id_counter,
-            simpleIDtoClientIDMap: room.simple_id_to_client_id_map,
-            accessListSimpleID: new Set(room.access_list_simple_id),
-            accessListClientID: new Set(room.access_list_client_id),
-            instructorFile: room.instructor_file,
-            passwordHash: room.password_hash,
-            salt: room.salt,
-            taskDescriptionPath: room.task_description_path,
-            learningGoalsPath: room.learning_goals_path,
-        };
-
-        RoomDataCache.set(roomId, roomData);
-        return roomData;
-    }
-
-    console.log("Room not found in database");
-
-    return undefined;
-}
-
-/**
- * Helper function to modify room data
- */
-async function modifyRoomData(
-    roomId: string,
-    modifier: (roomData: RoomData) => void
-) {
-    // Ensure the mutex for this roomId exists
-    if (!RoomLocks.has(roomId)) {
-        RoomLocks.set(roomId, new Mutex());
-    }
-
-    const roomMutex = RoomLocks.get(roomId)!;
-
-    await roomMutex.runExclusive(async () => {
-        // Ensure room data is initialized, skipping lock since we already hold it
-        let roomData = await getRoomData(roomId, true);
-
-        if (!roomData) {
-            console.log("Creating a new entry in cache only");
-
-            // If room does not exist, create a new entry in the cache
-            roomData = {
-                simpleIDCounter: 1,
-                simpleIDtoClientIDMap: {},
-                accessListSimpleID: new Set<number>(),
-                accessListClientID: new Set<number>(),
-                instructorFile: "",
-                passwordHash: "",
-                salt: "",
-                taskDescriptionPath: "",
-                learningGoalsPath: "",
-            };
-        }
-
-        // Apply the modifier function to update the room data
-        modifier(roomData);
-
-        // Update the cache and mark the room as dirty
-        RoomDataCache.set(roomId, roomData);
-        DirtyRooms.add(roomId);
-    });
-}
-
-// Periodically sync room data to the database
-setInterval(async () => {
-    const promises = [];
-
-    for (const roomId of DirtyRooms) {
-        // Ensure a mutex exists for the roomId
-        if (!RoomLocks.has(roomId)) {
-            RoomLocks.set(roomId, new Mutex());
-        }
-
-        const roomMutex = RoomLocks.get(roomId)!;
-
-        const syncPromise = roomMutex.runExclusive(async () => {
-            const roomData = RoomDataCache.get(roomId);
-            if (roomData) {
-                try {
-                    console.log(`Syncing room data for roomId: ${roomId}`);
-
-                    // Check if the room exists in the database
-                    const existingRoom = await db("rooms")
-                        .where({ room_id: roomId })
-                        .first();
-
-                    if (existingRoom) {
-                        // Update the existing room
-                        await db("rooms")
-                            .where({ room_id: roomId })
-                            .update({
-                                simple_id_counter: roomData.simpleIDCounter,
-                                simple_id_to_client_id_map: JSON.stringify(
-                                    roomData.simpleIDtoClientIDMap
-                                ),
-                                access_list_simple_id: JSON.stringify(
-                                    Array.from(roomData.accessListSimpleID)
-                                ),
-                                access_list_client_id: JSON.stringify(
-                                    Array.from(roomData.accessListClientID)
-                                ),
-                                instructor_file: roomData.instructorFile,
-                                password_hash: roomData.passwordHash,
-                                salt: roomData.salt,
-                                task_description_path:
-                                    roomData.taskDescriptionPath,
-                                learning_goals_path: roomData.learningGoalsPath,
-                            });
-                        console.log(`Updated room data for roomId: ${roomId}`);
-                    } else {
-                        // Insert a new room
-                        await db("rooms").insert({
-                            room_id: roomId,
-                            simple_id_counter: roomData.simpleIDCounter,
-                            simple_id_to_client_id_map: JSON.stringify(
-                                roomData.simpleIDtoClientIDMap
-                            ),
-                            access_list_simple_id: JSON.stringify(
-                                Array.from(roomData.accessListSimpleID)
-                            ),
-                            access_list_client_id: JSON.stringify(
-                                Array.from(roomData.accessListClientID)
-                            ),
-                            instructor_file: roomData.instructorFile,
-                            password_hash: roomData.passwordHash,
-                            salt: roomData.salt,
-                            task_description_path: roomData.taskDescriptionPath,
-                            learning_goals_path: roomData.learningGoalsPath,
-                        });
-                        console.log(
-                            `Inserted new room data for roomId: ${roomId}`
-                        );
-                    }
-
-                    DirtyRooms.delete(roomId);
-                } catch (error) {
-                    console.error(
-                        `Error syncing room data for roomId: ${roomId}`,
-                        error
-                    );
-                }
-            }
-        });
-
-        promises.push(syncPromise);
-    }
-
-    // Wait for all sync operations to complete
-    await Promise.all(promises);
-}, 60000); // Sync every 60 seconds to reduce database load
-
-/**
- * Helper function to send messages to all clients in a specific room
- */
-function sendToRoom(roomId: string, message: object) {
-    controlWebSocketServer.clients.forEach((client) => {
-        if (
-            (client as any).roomId === roomId &&
-            client.readyState === WebSocket.OPEN
-        ) {
-            client.send(JSON.stringify(message));
-        }
-    });
-}
-
-/**
- * Function to send accessLists to all clients in a room
- */
-async function sendAccessLists(roomId: string) {
-    const roomData = await getRoomData(roomId);
-    if (!roomData) {
-        console.log(`Room not found: ${roomId}`);
+    if (!roomId) {
+        console.log("Closing client connection");
+        ws.close();
         return;
     }
 
-    const accessListSimpleIDAsArray = Array.from(roomData.accessListSimpleID);
-    const accessListClientIDAsArray = Array.from(roomData.accessListClientID);
+    console.log(`Client connected to room: ${roomId}`);
 
-    console.log("Sending access list (simpleID)", accessListSimpleIDAsArray);
-    console.log("Sending access list (clientID)", accessListClientIDAsArray);
-
-    sendToRoom(roomId, {
-        type: "access_list_response",
-        payload: {
-            roomId,
-            accessListSimpleIDAsArray,
-            accessListClientIDAsArray,
-        },
+    await modifyRoomData(roomId, (roomData) => {
+        roomData.clients.add(ws);
     });
 
-    console.log(
-        `Sent access list for room: ${roomId} with simpleIDs: ${accessListSimpleIDAsArray}`
-    );
-}
-
-/**
- * Helper function to generate a random salt
- */
-function generateSalt(length: number): string {
-    const array = new Uint8Array(length);
-    crypto.getRandomValues(array);
-    return Array.from(array)
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join("");
-}
-
-/**
- * Helper function to hash a password using PBKDF2
- */
-async function hashPassword(password: string, salt: string): Promise<string> {
-    const encoder = new TextEncoder();
-    const passwordKey = await crypto.subtle.importKey(
-        "raw",
-        encoder.encode(password),
-        { name: "PBKDF2" },
-        false,
-        ["deriveBits"]
-    );
-
-    const derivedBits = await crypto.subtle.deriveBits(
-        {
-            name: "PBKDF2",
-            salt: encoder.encode(salt),
-            iterations: 1000,
-            hash: "SHA-256",
-        },
-        passwordKey,
-        256 // Output length in bits
-    );
-
-    return Array.from(new Uint8Array(derivedBits))
-        .map((byte) => byte.toString(16).padStart(2, "0"))
-        .join("");
-}
-
-/**
- * Validates a password using PBKDF2 with the salt and stored hash
- */
-async function validatePassword(
-    providedPassword: string,
-    storedPassword: string,
-    salt: string
-): Promise<boolean> {
-    const derivedHash = await hashPassword(providedPassword, salt);
-    return derivedHash === storedPassword;
-}
-
-// Endpoint to verify a password
-app.post("/api/verify-password", async (req, res) => {
-    const { password, roomId } = req.body;
-
-    // Ensure a mutex exists for this roomId
-    if (!RoomLocks.has(roomId)) {
-        RoomLocks.set(roomId, new Mutex());
-    }
-
-    const roomMutex = RoomLocks.get(roomId)!;
-
-    await roomMutex.runExclusive(async () => {
+    ws.on("message", async (message) => {
         try {
-            const roomData = await getRoomData(roomId, true);
-            if (!roomData) {
-                res.status(404).json({
-                    success: false,
-                    message: "Room not found",
-                });
-                return;
-            }
-
-            const isValidPassword = await validatePassword(
-                password,
-                roomData.passwordHash,
-                roomData.salt
-            );
-
-            if (isValidPassword) {
-                res.status(200).json({ success: true });
-            } else {
-                res.status(401).json({
-                    success: false,
-                    message: "Invalid password",
-                });
-            }
-        } catch (error) {
-            console.error(
-                `Error verifying password for roomId: ${roomId}`,
-                error
-            );
-            res.status(500).json({
-                success: false,
-                message: "Internal server error",
-            });
-        }
-    });
-});
-
-// Endpoint to verify if room exists
-app.post("/api/verify-room", async (req, res) => {
-    const { roomId } = req.body;
-
-    // Ensure a mutex exists for this roomId
-    if (!RoomLocks.has(roomId)) {
-        RoomLocks.set(roomId, new Mutex());
-    }
-
-    const roomMutex = RoomLocks.get(roomId)!;
-
-    await roomMutex.runExclusive(async () => {
-        try {
-            // Use getRoomData to retrieve or initialize the room data
-            const roomData = await getRoomData(roomId, true);
-            const roomExists = !!roomData;
-
-            if (roomExists) {
-                res.json({ success: true });
-            } else {
-                res.json({ success: false, message: "Room not found" });
-            }
-        } catch (error) {
-            console.error(
-                `Error verifying room existence for roomId: ${roomId}`,
-                error
-            );
-            res.status(500).json({
-                success: false,
-                message: "Internal server error",
-            });
-        }
-    });
-});
-
-// Yjs WebSocket connection setup
-yWebSocketServer.on("connection", (ws, request) => {
-    setupWSConnection(ws, request); // Setup Yjs connection
-});
-
-// Heartbeat function to mark a WebSocket as alive
-function heartbeat(this: CustomWebSocket) {
-    this.isAlive = true;
-}
-
-// Interval to send pings and check client responsiveness
-const interval = setInterval(() => {
-    controlWebSocketServer.clients.forEach((ws) => {
-        const customWs = ws as CustomWebSocket;
-
-        if (customWs.isAlive === false) {
-            console.log("Terminating unresponsive client");
-            return customWs.terminate();
-        }
-
-        customWs.isAlive = false;
-        customWs.ping();
-    });
-}, 30000);
-
-// Control WebSocket connection setup
-controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
-    // Extract roomId from query parameters
-    const url = new URL(request.url || "/", `http://${request.headers.host}`);
-    const roomIdUrl = url.searchParams.get("roomId");
-
-    if (!roomIdUrl) {
-        ws.close(4000, "Room ID is required");
-        return;
-    }
-
-    // Associate the WebSocket (client) with the roomId
-    ws.roomId = roomIdUrl;
-
-    ws.isAlive = true;
-    console.log(`Client connected to room: ${roomIdUrl}`);
-
-    // Refresh the `isAlive` status on receiving a pong
-    ws.on("pong", heartbeat.bind(ws));
-
-    // Handle connection errors
-    ws.on("error", console.error);
-
-    // Handle incoming messages
-    ws.on("message", async (message: string) => {
-        try {
-            const { type, payload } = JSON.parse(message);
+            const { type, payload } = JSON.parse(message.toString());
             const {
                 roomId,
                 simpleID,
@@ -543,7 +92,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
             console.log("Received message: ", type, payload);
 
             // Ensure roomId is in payload for room-specific actions
-            if (!roomId || roomId !== roomIdUrl) {
+            if (!roomId || roomId !== payload.roomId) {
                 // Ignore messages without a roomId
                 console.log("Invalid roomId in message payload.");
                 return;
@@ -647,7 +196,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                         ws.send(
                             JSON.stringify({
-                                type: "session_data_response",
+                                type: "register_client_response",
                                 payload: {
                                     roomId,
                                     taskDescriptionPath:
@@ -808,7 +357,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "open_terminal_request":
                     // Notify the clients in the room to open the terminal
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "open_terminal_response",
                         payload: { roomId },
                     });
@@ -820,7 +369,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "close_terminal_request":
                     // Notify the clients in the room to close the terminal
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "close_terminal_response",
                         payload: { roomId },
                     });
@@ -832,7 +381,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "open_explorer_request":
                     // Notify the clients in the room to open the explorer
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "open_explorer_response",
                         payload: { roomId },
                     });
@@ -844,7 +393,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "close_explorer_request":
                     // Notify the clients in the room to close the explorer
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "close_explorer_response",
                         payload: { roomId },
                     });
@@ -856,7 +405,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "show_room_id_request":
                     // Notify the clients in the room to show the room ID
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "show_room_id_response",
                         payload: { roomId },
                     });
@@ -865,7 +414,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "hide_room_id_request":
                     // Notify the clients in the room to hide the room ID
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "hide_room_id_response",
                         payload: { roomId },
                     });
@@ -874,7 +423,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "change_font_size_request":
                     // Notify the clients in the room to change the font size
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "change_font_size_response",
                         payload: {
                             roomId,
@@ -889,7 +438,7 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
 
                 case "change_theme_request":
                     // Notify the clients in the room to change the theme
-                    sendToRoom(roomId, {
+                    roomBroadcast(roomId, {
                         type: "change_theme_response",
                         payload: { roomId, changedTheme },
                     });
@@ -905,12 +454,153 @@ controlWebSocketServer.on("connection", (ws: CustomWebSocket, request) => {
         }
     });
 
-    ws.on("close", () => {
-        console.log(`Client disconnected from room: ${roomIdUrl}`);
+    ws.on("close", async () => {
+        console.log(`Client disconnected from room: ${roomId}`);
+
+        await modifyRoomData(roomId, (roomData) => {
+            roomData.clients.delete(ws);
+        });
+
+        cleanUpRoomCache();
+    });
+
+    // FIXME: Use error handling, maybe also remove it from the clients list of the room data
+    ws.on("error", console.error);
+});
+
+/**
+ * Broadcast a message to all clients in a room
+ */
+async function roomBroadcast(roomId: string, message: object) {
+    const roomData = await getRoomData(roomId);
+    if (!roomData) {
+        console.log(`Room not found: ${roomId}`);
+        return;
+    }
+
+    roomData.clients.forEach((client) => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(JSON.stringify(message));
+        }
+    });
+}
+
+/**
+ * Sends the access list to all clients in the room
+ */
+async function sendAccessLists(roomId: string) {
+    const roomData = await getRoomData(roomId);
+    if (!roomData) {
+        console.log(`Room not found: ${roomId}`);
+        return;
+    }
+
+    const accessListSimpleIDAsArray = Array.from(roomData.accessListSimpleID);
+    const accessListClientIDAsArray = Array.from(roomData.accessListClientID);
+
+    roomBroadcast(roomId, {
+        type: "access_list_response",
+        payload: {
+            roomId,
+            accessListSimpleIDAsArray,
+            accessListClientIDAsArray,
+        },
+    });
+
+    console.log(
+        `Sent access list for room: ${roomId} with simpleIDs: ${accessListSimpleIDAsArray}`
+    );
+}
+
+// API route to verify if a password is correct
+app.post("/api/verify-password", async (req, res) => {
+    const { password, roomId } = req.body;
+
+    // Ensure a mutex exists for this roomId
+    if (!RoomLocks.has(roomId)) {
+        RoomLocks.set(roomId, new Mutex());
+    }
+
+    const roomMutex = RoomLocks.get(roomId)!;
+
+    await roomMutex.runExclusive(async () => {
+        try {
+            const roomData = await getRoomData(roomId, true);
+            if (!roomData) {
+                res.status(404).json({
+                    success: false,
+                    message: "Room not found",
+                });
+                return;
+            }
+
+            const isValidPassword = await validatePassword(
+                password,
+                roomData.passwordHash,
+                roomData.salt
+            );
+
+            if (isValidPassword) {
+                res.status(200).json({ success: true });
+            } else {
+                res.status(401).json({
+                    success: false,
+                    message: "Invalid password",
+                });
+            }
+        } catch (error) {
+            console.error(
+                `Error verifying password for roomId: ${roomId}`,
+                error
+            );
+            res.status(500).json({
+                success: false,
+                message: "Internal server error",
+            });
+        }
     });
 });
 
-// Cleanup interval on server shutdown
-controlWebSocketServer.on("close", () => {
-    clearInterval(interval);
+// API route to verify if a room exists
+app.post("/api/verify-room", async (req, res) => {
+    const { roomId } = req.body;
+
+    // Ensure a mutex exists for this roomId
+    if (!RoomLocks.has(roomId)) {
+        RoomLocks.set(roomId, new Mutex());
+    }
+
+    const roomMutex = RoomLocks.get(roomId)!;
+
+    await roomMutex.runExclusive(async () => {
+        try {
+            // Use getRoomData to retrieve or initialize the room data
+            const roomData = await getRoomData(roomId, true);
+            const roomExists = !!roomData;
+
+            if (roomExists) {
+                res.status(200).json({ success: true });
+            } else {
+                res.status(401).json({
+                    success: false,
+                    message: "Room not found",
+                });
+            }
+        } catch (error) {
+            console.error(
+                `Error verifying room existence for roomId: ${roomId}`,
+                error
+            );
+            res.status(500).json({
+                success: false,
+                message: "Internal server error",
+            });
+        }
+    });
+});
+
+// Start the server
+const PORT = process.env.PORT || 1234;
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
 });
