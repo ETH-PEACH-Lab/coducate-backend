@@ -17,6 +17,7 @@ export async function seed(knex: Knex): Promise<void> {
     //         salt: "",
     //         task_description_path: "",
     //         learning_goals_path: "",
+    //         clients: JSON.stringify([]),
     //     },
     // ]);
 }

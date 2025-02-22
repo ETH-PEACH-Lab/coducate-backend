@@ -12,6 +12,7 @@ export async function up(knex: Knex): Promise<void> {
         table.text("salt");
         table.text("task_description_path");
         table.text("learning_goals_path");
+        table.json("clients").notNullable();
     });
 }
 
