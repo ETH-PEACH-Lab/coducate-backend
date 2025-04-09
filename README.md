@@ -4,7 +4,8 @@ This is the backend server for Coducate. It provides WebSocket connections for r
 
 ## Prerequisites
 
--   Node.js (16+)
+-   Node.js (22+)
+-   npm (11+)
 -   Docker and Docker Compose
 
 ## Getting Started
