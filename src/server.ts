@@ -599,8 +599,13 @@ app.post("/api/verify-room", async (req, res) => {
     });
 });
 
+// Health check endpoint
+app.get("/health", (req, res) => {
+    res.status(200).send("OK");
+});
+
 // Start the server
-const PORT = process.env.PORT || 1234;
+const PORT = process.env.PORT;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
 });

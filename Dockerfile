@@ -1,17 +1,21 @@
-FROM --platform=linux/amd64 node:22.11.0-bookworm-slim
+FROM node:25-alpine3.22
 
 WORKDIR /usr/src/coducate-backend
 
-COPY package.json ./
+RUN apk update && apk add --no-cache mariadb-client bash ca-certificates wget && \
+    wget https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem -O /usr/local/share/ca-certificates/rds-global-bundle.pem && \
+    update-ca-certificates
 
-COPY package-lock.json ./
+COPY package.json package-lock.json ./
 
-RUN npm install
+RUN npm ci
 
 COPY . .
 
-RUN apt-get update && apt-get install -y default-mysql-client
-
-CMD ["npm", "start"]
-
 EXPOSE 1234
+
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["npm", "start"]
