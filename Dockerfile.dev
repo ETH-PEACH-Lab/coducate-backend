@@ -1,0 +1,19 @@
+FROM node:25-alpine3.22
+
+WORKDIR /usr/src/coducate-backend
+
+RUN apk update && apk add --no-cache mariadb-client bash
+
+COPY package.json package-lock.json ./
+
+RUN npm ci
+
+COPY . .
+
+EXPOSE 1234
+
+COPY docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["npm", "run", "dev"]

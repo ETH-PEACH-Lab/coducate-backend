@@ -2,88 +2,25 @@
 
 This is the backend server for Coducate. It provides WebSocket connections for real-time collaboration and a REST API for room management.
 
-## Prerequisites
-
--   Node.js (22+)
--   npm (11+)
--   Docker and Docker Compose
-
 ## Getting Started
 
-### Environment Setup
+For complete setup instructions, please refer to the [main project README](https://github.com/madbeamer/coducate-app/blob/57ff5802af539000dac73fc02fc84685cd986863/README.md).
 
-1. Clone the repository
-2. Create a `.env` file in the root directory with the necessary environment variables.
+## Quick Start (Standalone)
 
-### Running the Database
+If you want to run the backend without Docker:
 
-Start the MySQL database:
+1. Ensure MariaDB is running (locally or via Docker)
+2. Create a `.env` file with database credentials
+3. Install dependencies and run migrations:
+   
+    ```bash
+    npm install
+    npx knex migrate:latest --knexfile knexfile.ts
+    npm start
+    ```
 
-```bash
-docker compose up -d mysql
-```
-
-Apply database migrations (if the `data/mysql` directory doesn't exist):
-
-```bash
-npx knex migrate:latest --knexfile knexfile.ts
-```
-
-### Starting the Server
-
-Install dependencies:
-
-```bash
-npm install
-```
-
-Start the server:
-
-```bash
-npm start
-```
-
-The server will run on port 1234 by default.
-
-## Development Tools
-
-### Database Management
-
-Connect to the MySQL database:
-
-```bash
-mysql -h 127.0.0.1 -P 3306 -u root -p
-```
-
-Query the rooms table:
-
-```sql
-USE coducate;
-SELECT * FROM rooms;
-```
-
-Reset the rooms table:
-
-```bash
-npx knex migrate:down --knexfile knexfile.ts
-npx knex migrate:latest --knexfile knexfile.ts
-```
-
-Seed the database (after creating a seed file):
-
-```bash
-npx knex seed:run --knexfile knexfile.ts
-```
-
-## Production Deployment
-
-For production, set the NODE_ENV to 'production' in your .env file:
-
-```
-NODE_ENV=production
-```
-
-Use the production database configuration from knexfile.ts.
+The server will run on port 1234.
 
 ## License
 
