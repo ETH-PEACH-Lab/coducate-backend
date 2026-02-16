@@ -1,3 +1,4 @@
+import nodeCrypto from "crypto";
 import db from "./db";
 import { Mutex } from "async-mutex";
 import { WebSocket } from "ws";
@@ -265,7 +266,7 @@ export async function hashPassword(
         {
             name: "PBKDF2",
             salt: encoder.encode(salt),
-            iterations: 1000,
+            iterations: 600000,
             hash: "SHA-256",
         },
         passwordKey,
@@ -286,5 +287,7 @@ export async function validatePassword(
     salt: string
 ): Promise<boolean> {
     const derivedHash = await hashPassword(providedPassword, salt);
-    return derivedHash === storedPassword;
+    const a = Buffer.from(derivedHash, "hex");
+    const b = Buffer.from(storedPassword, "hex");
+    return a.length === b.length && nodeCrypto.timingSafeEqual(a, b);
 }
