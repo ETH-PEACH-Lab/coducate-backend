@@ -1,242 +1,143 @@
 import nodeCrypto from "crypto";
 import db from "./db";
-import { Mutex } from "async-mutex";
-import { WebSocket } from "ws";
-
-interface RoomData {
-    simpleIDCounter: number;
-    simpleIDtoClientIDMap: Record<number, number>;
-    accessListSimpleID: Set<number>;
-    accessListClientID: Set<number>;
-    instructorFile: string;
-    passwordHash: string;
-    salt: string;
-    taskDescriptionPath: string;
-    learningGoalsPath: string;
-    clients: Set<WebSocket>;
-}
-const RoomDataCache: Map<string, RoomData> = new Map();
-const DirtyRooms: Set<string> = new Set();
-export const RoomLocks: Map<string, Mutex> = new Map();
 
 /**
- * Remove empty rooms from the cache
+ * Get a room row from the database.
  */
-export function cleanUpRoomCache() {
-    for (const [roomId, roomData] of RoomDataCache) {
-        if (roomData.clients.size === 0) {
-            RoomDataCache.delete(roomId);
-            DirtyRooms.delete(roomId);
-        }
-    }
+export async function getRoom(roomId: string) {
+    return db("rooms").where({ room_id: roomId }).first();
 }
 
 /**
- * Get room data from cache or database
+ * Create a new room in the database.
  */
-export async function getRoomData(
+export async function createRoom(
     roomId: string,
-    skipLock = false
-): Promise<RoomData | undefined> {
-    // Ensure the mutex for this roomId exists
-    if (!RoomLocks.has(roomId)) {
-        RoomLocks.set(roomId, new Mutex());
+    data: {
+        passwordHash: string;
+        salt: string;
+        taskDescriptionPath?: string;
+        learningGoalsPath?: string;
     }
-
-    const roomMutex = RoomLocks.get(roomId)!;
-
-    if (skipLock) {
-        // Skip acquiring the lock if the caller already holds it
-        console.log(`Skipping lock acquisition for roomId: ${roomId}`);
-        return await fetchRoomData(roomId);
-    }
-
-    // Acquire the lock
-    return await roomMutex.runExclusive(async () => {
-        return await fetchRoomData(roomId);
-    });
-}
-
-/**
- * Core logic to fetch room data from cache or database
- */
-export async function fetchRoomData(
-    roomId: string
-): Promise<RoomData | undefined> {
-    // Check if the room data is already in the cache
-    if (RoomDataCache.has(roomId)) {
-        console.log("Room data found in cache");
-        return RoomDataCache.get(roomId)!;
-    }
-
-    console.log("Room not found in cache, checking database");
-
-    // Fetch the room data from the database
-    const room = await db("rooms").where({ room_id: roomId }).first();
-    if (room) {
-        console.log("Room found in database");
-
-        const roomData: RoomData = {
-            simpleIDCounter: room.simple_id_counter,
-            simpleIDtoClientIDMap: room.simple_id_to_client_id_map,
-            accessListSimpleID: new Set(room.access_list_simple_id),
-            accessListClientID: new Set(room.access_list_client_id),
-            instructorFile: room.instructor_file,
-            passwordHash: room.password_hash,
-            salt: room.salt,
-            taskDescriptionPath: room.task_description_path,
-            learningGoalsPath: room.learning_goals_path,
-            clients: new Set(room.clients),
-        };
-
-        RoomDataCache.set(roomId, roomData);
-        return roomData;
-    }
-
-    console.log("Room not found in database");
-
-    return undefined;
-}
-
-/**
- * Helper function to modify room data
- */
-export async function modifyRoomData(
-    roomId: string,
-    modifier: (roomData: RoomData) => void
 ) {
-    // Ensure the mutex for this roomId exists
-    if (!RoomLocks.has(roomId)) {
-        RoomLocks.set(roomId, new Mutex());
-    }
-
-    const roomMutex = RoomLocks.get(roomId)!;
-
-    await roomMutex.runExclusive(async () => {
-        // Ensure room data is initialized, skipping lock since we already hold it
-        let roomData = await getRoomData(roomId, true);
-
-        if (!roomData) {
-            console.log("Creating a new entry in cache only");
-
-            // If room does not exist, create a new entry in the cache
-            roomData = {
-                simpleIDCounter: 1,
-                simpleIDtoClientIDMap: {},
-                accessListSimpleID: new Set<number>(),
-                accessListClientID: new Set<number>(),
-                instructorFile: "",
-                passwordHash: "",
-                salt: "",
-                taskDescriptionPath: "",
-                learningGoalsPath: "",
-                clients: new Set<WebSocket>(),
-            };
-        }
-
-        // Apply the modifier function to update the room data
-        modifier(roomData);
-
-        // Update the cache and mark the room as dirty
-        RoomDataCache.set(roomId, roomData);
-        DirtyRooms.add(roomId);
+    await db("rooms").insert({
+        room_id: roomId,
+        simple_id_counter: 1,
+        instructor_file: "",
+        password_hash: data.passwordHash,
+        salt: data.salt,
+        task_description_path: data.taskDescriptionPath || "",
+        learning_goals_path: data.learningGoalsPath || "",
     });
 }
 
 /**
- * Save room data to the database
+ * Update specific fields of an existing room.
+ * Automatically updates last_active_at timestamp.
  */
-async function saveRoomDataToDB(roomId: string, roomData: RoomData) {
-    console.log(`Syncing room data for roomId: ${roomId}`);
-
-    // Check if the room exists in the database
-    const existingRoom = await db("rooms").where({ room_id: roomId }).first();
-
-    if (existingRoom) {
-        // Update the existing room
-        await db("rooms")
-            .where({ room_id: roomId })
-            .update({
-                simple_id_counter: roomData.simpleIDCounter,
-                simple_id_to_client_id_map: JSON.stringify(
-                    roomData.simpleIDtoClientIDMap
-                ),
-                access_list_simple_id: JSON.stringify(
-                    Array.from(roomData.accessListSimpleID)
-                ),
-                access_list_client_id: JSON.stringify(
-                    Array.from(roomData.accessListClientID)
-                ),
-                instructor_file: roomData.instructorFile,
-                password_hash: roomData.passwordHash,
-                salt: roomData.salt,
-                task_description_path: roomData.taskDescriptionPath,
-                learning_goals_path: roomData.learningGoalsPath,
-                clients: JSON.stringify(Array.from(roomData.clients)),
-            });
-        console.log(`Updated room data for roomId: ${roomId}`);
-    } else {
-        // Insert a new room
-        await db("rooms").insert({
-            room_id: roomId,
-            simple_id_counter: roomData.simpleIDCounter,
-            simple_id_to_client_id_map: JSON.stringify(
-                roomData.simpleIDtoClientIDMap
-            ),
-            access_list_simple_id: JSON.stringify(
-                Array.from(roomData.accessListSimpleID)
-            ),
-            access_list_client_id: JSON.stringify(
-                Array.from(roomData.accessListClientID)
-            ),
-            instructor_file: roomData.instructorFile,
-            password_hash: roomData.passwordHash,
-            salt: roomData.salt,
-            task_description_path: roomData.taskDescriptionPath,
-            learning_goals_path: roomData.learningGoalsPath,
-            clients: JSON.stringify(Array.from(roomData.clients)),
-        });
-        console.log(`Inserted new room data for roomId: ${roomId}`);
-    }
+export async function updateRoom(
+    roomId: string,
+    fields: Record<string, any>
+) {
+    await db("rooms")
+        .where({ room_id: roomId })
+        .update({ ...fields, last_active_at: db.fn.now() });
 }
 
-// Periodically sync room data to the database
-setInterval(async () => {
-    const promises = [];
-
-    for (const roomId of DirtyRooms) {
-        // Ensure a mutex exists for the roomId
-        if (!RoomLocks.has(roomId)) {
-            RoomLocks.set(roomId, new Mutex());
-        }
-
-        const roomMutex = RoomLocks.get(roomId)!;
-
-        const syncPromise = roomMutex.runExclusive(async () => {
-            const roomData = RoomDataCache.get(roomId);
-            if (roomData) {
-                try {
-                    await saveRoomDataToDB(roomId, roomData);
-
-                    DirtyRooms.delete(roomId);
-                } catch (error) {
-                    console.error(
-                        `Error syncing room data for roomId: ${roomId}`,
-                        error
-                    );
-                }
-            }
-        });
-
-        promises.push(syncPromise);
-    }
-
-    // Wait for all sync operations to complete
-    await Promise.all(promises);
-}, 60000); // Sync every 60 seconds to reduce database load
+// ── room_clients table helpers ──
 
 /**
- * Generates a random salt for password hashing
+ * Get the simpleID-to-clientID mapping for a room.
+ */
+export async function getClientMap(
+    roomId: string
+): Promise<Record<number, number>> {
+    const rows = await db("room_clients")
+        .where({ room_id: roomId })
+        .select("simple_id", "client_id");
+    const map: Record<number, number> = {};
+    rows.forEach((r) => {
+        map[r.simple_id] = r.client_id;
+    });
+    return map;
+}
+
+/**
+ * Set (upsert) a simpleID-to-clientID mapping entry.
+ */
+export async function upsertClient(
+    roomId: string,
+    simpleId: number,
+    clientId: number
+) {
+    await db("room_clients")
+        .insert({ room_id: roomId, simple_id: simpleId, client_id: clientId })
+        .onConflict(["room_id", "simple_id"])
+        .merge({ client_id: clientId });
+}
+
+// ── room_access table helpers ──
+
+/**
+ * Get the list of simple IDs that have write access in a room.
+ */
+export async function getAccessList(roomId: string): Promise<number[]> {
+    const rows = await db("room_access")
+        .where({ room_id: roomId })
+        .select("simple_id");
+    return rows.map((r) => r.simple_id);
+}
+
+/**
+ * Grant write access to a single simpleID.
+ */
+export async function grantAccess(roomId: string, simpleId: number) {
+    await db("room_access")
+        .insert({ room_id: roomId, simple_id: simpleId })
+        .onConflict(["room_id", "simple_id"])
+        .ignore();
+}
+
+/**
+ * Grant write access to all known clients in a room.
+ */
+export async function grantAccessAll(roomId: string) {
+    const clients = await db("room_clients")
+        .where({ room_id: roomId })
+        .select("simple_id");
+
+    if (clients.length === 0) return;
+
+    const rows = clients.map((c) => ({
+        room_id: roomId,
+        simple_id: c.simple_id,
+    }));
+
+    // Use a transaction to batch-insert with conflict ignore
+    await db("room_access")
+        .insert(rows)
+        .onConflict(["room_id", "simple_id"])
+        .ignore();
+}
+
+/**
+ * Revoke write access for a single simpleID.
+ */
+export async function revokeAccess(roomId: string, simpleId: number) {
+    await db("room_access")
+        .where({ room_id: roomId, simple_id: simpleId })
+        .delete();
+}
+
+/**
+ * Revoke write access for all clients in a room.
+ */
+export async function revokeAccessAll(roomId: string) {
+    await db("room_access").where({ room_id: roomId }).delete();
+}
+
+/**
+ * Generates a random salt for password hashing.
  */
 export function generateSalt(length: number): string {
     const array = new Uint8Array(length);
@@ -247,7 +148,7 @@ export function generateSalt(length: number): string {
 }
 
 /**
- * Hashes a password using PBKDF2 with the salt
+ * Hashes a password using PBKDF2 with the salt.
  */
 export async function hashPassword(
     password: string,
@@ -270,7 +171,7 @@ export async function hashPassword(
             hash: "SHA-256",
         },
         passwordKey,
-        256 // Output length in bits
+        256
     );
 
     return Array.from(new Uint8Array(derivedBits))
@@ -279,7 +180,7 @@ export async function hashPassword(
 }
 
 /**
- * Validates a password using PBKDF2 with the salt and stored hash
+ * Validates a password using PBKDF2 with the salt and stored hash.
  */
 export async function validatePassword(
     providedPassword: string,
