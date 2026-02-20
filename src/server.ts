@@ -30,8 +30,8 @@ const app = express();
 
 // CORS — restrict to the production frontend origin and localhost for development
 const allowedOrigins = [
-    "https://coducate.me",
-    "https://www.coducate.me",
+    "https://coducate.live",
+    "https://www.coducate.live",
     "http://localhost:5173",
     "http://localhost:3000",
 ];
