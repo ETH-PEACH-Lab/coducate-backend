@@ -1,13 +1,19 @@
 import express from "express";
 import cors from "cors";
+import crypto from "crypto";
 import { createServer } from "http";
 import { WebSocket, WebSocketServer } from "ws";
 import dotenv from "dotenv";
-const setupWSConnection = require("y-websocket/bin/utils").setupWSConnection;
+const { setupWSConnection, docs: yjsDocs } = require("y-websocket/bin/utils");
 import {
     getRoom,
     createRoom,
     updateRoom,
+    endRoom,
+    reactivateRoom,
+    softDeleteRoom,
+    isRoomActive,
+    cleanupStaleRooms,
     validatePassword,
     hashPassword,
     generateSalt,
@@ -18,6 +24,7 @@ import {
     grantAccessAll,
     revokeAccess,
     revokeAccessAll,
+    validateClientSecret,
 } from "./rooms";
 import { createToken, verifyToken } from "./auth";
 import rateLimit from "express-rate-limit";
@@ -115,6 +122,7 @@ const wsMessageSchema = z.object({
         learningGoalsPath: z.string().max(500).optional(),
         increase: z.boolean().optional(),
         changedTheme: z.string().max(50).optional(),
+        clientSecret: z.string().max(128).optional(),
     }),
 });
 
@@ -140,10 +148,11 @@ const INSTRUCTOR_ONLY_TYPES = new Set([
     "hide_room_id_request",
     "change_font_size_request",
     "change_theme_request",
+    "end_session_request",
 ]);
 
 // Both WebSocket servers share the same HTTP server
-server.on("upgrade", (request, socket, head) => {
+server.on("upgrade", async (request, socket, head) => {
     const url = new URL(
         request.url || "/",
         `http://${request.headers.host}`
@@ -167,6 +176,15 @@ server.on("upgrade", (request, socket, head) => {
 
     // Attach verified token data to the request for use in connection handlers
     (request as any).tokenPayload = tokenPayload;
+
+    // Check if the room is still active before allowing WebSocket connections
+    const roomId = tokenPayload.roomId;
+    const room = await getRoom(roomId);
+    if (!room || room.status === "ended") {
+        socket.write("HTTP/1.1 410 Gone\r\n\r\n");
+        socket.destroy();
+        return;
+    }
 
     if (pathname.startsWith("/yjs")) {
         wssYjs.handleUpgrade(request, socket, head, (ws) => {
@@ -197,6 +215,11 @@ wssCustom.on("connection", async (ws, req) => {
     (ws as any).roomId = roomId;
 
     console.log(`Client connected to room: ${roomId} (role: ${role})`);
+
+    // Update last_active_at on instructor connection
+    if (role === "instructor") {
+        updateRoom(roomId, {}).catch(() => {});
+    }
 
     ws.on("message", async (message) => {
         try {
@@ -324,8 +347,9 @@ wssCustom.on("connection", async (ws, req) => {
                     }
 
                     const newSimpleID = room.simple_id_counter;
+                    const clientSecret = crypto.randomBytes(32).toString("hex");
 
-                    await upsertClient(wsRoomId, newSimpleID, clientID);
+                    await upsertClient(wsRoomId, newSimpleID, clientID, clientSecret);
                     await updateRoom(wsRoomId, {
                         simple_id_counter: newSimpleID + 1,
                     });
@@ -336,6 +360,7 @@ wssCustom.on("connection", async (ws, req) => {
                             payload: {
                                 roomId: wsRoomId,
                                 newSimpleID,
+                                clientSecret,
                                 taskDescriptionPath: room.task_description_path,
                                 learningGoalsPath: room.learning_goals_path,
                             },
@@ -353,9 +378,40 @@ wssCustom.on("connection", async (ws, req) => {
                 case "register_client_request": {
                     if (simpleID == null || clientID == null) return;
 
+                    const clientSecret = payload.clientSecret;
+                    if (!clientSecret) {
+                        ws.send(
+                            JSON.stringify({
+                                type: "register_client_response",
+                                payload: {
+                                    roomId: wsRoomId,
+                                    error: "Client secret is required",
+                                },
+                            })
+                        );
+                        return;
+                    }
+
                     const room = await getRoom(wsRoomId);
                     if (!room) {
                         console.log(`Room not found: ${wsRoomId}`);
+                        return;
+                    }
+
+                    const isValid = await validateClientSecret(wsRoomId, simpleID, clientSecret);
+                    if (!isValid) {
+                        ws.send(
+                            JSON.stringify({
+                                type: "register_client_response",
+                                payload: {
+                                    roomId: wsRoomId,
+                                    error: "Invalid client secret",
+                                },
+                            })
+                        );
+                        console.log(
+                            `Rejected register_client_request: invalid secret for simpleID ${simpleID} in room ${wsRoomId}`
+                        );
                         return;
                     }
 
@@ -552,6 +608,31 @@ wssCustom.on("connection", async (ws, req) => {
                     });
                     break;
 
+                case "end_session_request": {
+                    await endRoom(wsRoomId);
+
+                    roomBroadcast(wsRoomId, {
+                        type: "session_ended",
+                        payload: { roomId: wsRoomId },
+                    });
+
+                    console.log(`Session ended for room: ${wsRoomId}`);
+
+                    // Clean up the Yjs document from memory after a short delay
+                    // (gives clients time to disconnect gracefully after receiving session_ended)
+                    setTimeout(() => {
+                        const docName = "yjs/" + wsRoomId;
+                        if (yjsDocs.has(docName)) {
+                            yjsDocs.delete(docName);
+                            console.log(
+                                `Cleaned up Yjs document for room: ${wsRoomId}`
+                            );
+                        }
+                    }, 5000);
+
+                    break;
+                }
+
                 default:
                     break;
             }
@@ -679,6 +760,21 @@ app.post("/api/verify-password", passwordRateLimit, async (req, res) => {
         );
 
         if (isValidPassword) {
+            // Only reactivate ended rooms when the VS Code extension rejoins
+            if (room.status === "ended" || room.status === "deleted") {
+                const source = req.headers["x-coducate-source"];
+                if (source === "vscode") {
+                    await reactivateRoom(roomId);
+                } else {
+                    res.status(410).json({
+                        success: false,
+                        message: "This session has ended.",
+                        ended: true,
+                    });
+                    return;
+                }
+            }
+
             const token = createToken(roomId, "instructor");
             res.status(200).json({ success: true, token });
         } else {
@@ -715,18 +811,76 @@ app.post("/api/verify-room", verifyRoomRateLimit, async (req, res) => {
     try {
         const room = await getRoom(roomId);
 
-        if (room) {
-            const token = createToken(roomId, "student");
-            res.status(200).json({ success: true, token });
-        } else {
+        if (!room) {
             res.status(401).json({
                 success: false,
                 message: "Room not found",
             });
+            return;
         }
+
+        if (room.status === "ended" || room.status === "deleted") {
+            res.status(410).json({
+                success: false,
+                message: "This session has ended.",
+                ended: true,
+            });
+            return;
+        }
+
+        const token = createToken(roomId, "student");
+        res.status(200).json({ success: true, token });
     } catch (error) {
         console.error(
             `Error verifying room existence for roomId: ${roomId}`,
+            error
+        );
+        res.status(500).json({
+            success: false,
+            message: "Internal server error",
+        });
+    }
+});
+
+// API route to soft-delete a session (marks for backend cleanup)
+app.post("/api/delete-session", passwordRateLimit, async (req, res) => {
+    const parsed = verifyPasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+        res.status(400).json({
+            success: false,
+            message: parsed.error.issues[0]?.message || "Invalid input",
+        });
+        return;
+    }
+
+    const { password, roomId } = parsed.data;
+
+    try {
+        const room = await getRoom(roomId);
+        if (!room) {
+            // Room already deleted or never existed — treat as success
+            res.status(200).json({ success: true });
+            return;
+        }
+
+        const isValidPassword = await validatePassword(
+            password,
+            room.password_hash,
+            room.salt
+        );
+
+        if (isValidPassword) {
+            await softDeleteRoom(roomId);
+            res.status(200).json({ success: true });
+        } else {
+            res.status(401).json({
+                success: false,
+                message: "Invalid password",
+            });
+        }
+    } catch (error) {
+        console.error(
+            `Error deleting session for roomId: ${roomId}`,
             error
         );
         res.status(500).json({
@@ -745,4 +899,16 @@ app.get("/health", (req, res) => {
 const PORT = process.env.PORT;
 server.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+
+    // Clean up stale rooms on startup
+    cleanupStaleRooms().then((count) => {
+        if (count > 0) console.log(`Cleaned up ${count} stale room(s).`);
+    });
+
+    // Clean up stale rooms every 24 hours
+    setInterval(() => {
+        cleanupStaleRooms().then((count) => {
+            if (count > 0) console.log(`Cleaned up ${count} stale room(s).`);
+        });
+    }, 24 * 60 * 60 * 1000);
 });

@@ -44,6 +44,74 @@ export async function updateRoom(
         .update({ ...fields, last_active_at: db.fn.now() });
 }
 
+/**
+ * Mark a room as ended. The room record persists in the database
+ * so the instructor can rejoin later. WebSocket connections are rejected.
+ */
+export async function endRoom(roomId: string) {
+    await db("rooms")
+        .where({ room_id: roomId })
+        .update({
+            status: "ended",
+            ended_at: db.fn.now(),
+            last_active_at: db.fn.now(),
+        });
+}
+
+/**
+ * Reactivate an ended room so it can accept connections again.
+ */
+export async function reactivateRoom(roomId: string) {
+    await db("rooms")
+        .where({ room_id: roomId })
+        .update({
+            status: "active",
+            ended_at: null,
+            last_active_at: db.fn.now(),
+        });
+}
+
+/**
+ * Mark a room for deletion. Backend cleanup will hard-delete it.
+ */
+export async function softDeleteRoom(roomId: string) {
+    await db("rooms")
+        .where({ room_id: roomId })
+        .update({
+            status: "deleted",
+            ended_at: db.raw("COALESCE(ended_at, NOW())"),
+            last_active_at: db.fn.now(),
+        });
+}
+
+/**
+ * Check if a room is active (not ended or deleted).
+ */
+export async function isRoomActive(roomId: string): Promise<boolean> {
+    const room = await getRoom(roomId);
+    return room?.status === "active";
+}
+
+/**
+ * Delete stale rooms from the database.
+ * - Soft-deleted rooms (status = "deleted") are removed immediately
+ * - Active rooms with no activity for 6 months (orphaned, safety net)
+ */
+export async function cleanupStaleRooms(): Promise<number> {
+    const sixMonthsAgo = new Date(Date.now() - 180 * 24 * 60 * 60 * 1000);
+
+    const deletedSoftDeleted = await db("rooms")
+        .where("status", "deleted")
+        .delete();
+
+    const deletedOrphaned = await db("rooms")
+        .where("status", "active")
+        .where("last_active_at", "<", sixMonthsAgo)
+        .delete();
+
+    return deletedSoftDeleted + deletedOrphaned;
+}
+
 // ── room_clients table helpers ──
 
 /**
@@ -68,12 +136,43 @@ export async function getClientMap(
 export async function upsertClient(
     roomId: string,
     simpleId: number,
-    clientId: number
+    clientId: number,
+    clientSecret?: string
 ) {
+    const data: Record<string, unknown> = {
+        room_id: roomId,
+        simple_id: simpleId,
+        client_id: clientId,
+    };
+    const mergeData: Record<string, unknown> = { client_id: clientId };
+
+    if (clientSecret) {
+        data.client_secret = clientSecret;
+        mergeData.client_secret = clientSecret;
+    }
+
     await db("room_clients")
-        .insert({ room_id: roomId, simple_id: simpleId, client_id: clientId })
+        .insert(data)
         .onConflict(["room_id", "simple_id"])
-        .merge({ client_id: clientId });
+        .merge(mergeData);
+}
+
+/**
+ * Validate that a client secret matches the stored secret for a simpleID.
+ */
+export async function validateClientSecret(
+    roomId: string,
+    simpleId: number,
+    clientSecret: string
+): Promise<boolean> {
+    const row = await db("room_clients")
+        .where({
+            room_id: roomId,
+            simple_id: simpleId,
+            client_secret: clientSecret,
+        })
+        .first();
+    return !!row;
 }
 
 // ── room_access table helpers ──
