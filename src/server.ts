@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import crypto from "crypto";
+import cron from "node-cron";
 import { createServer } from "http";
 import { WebSocket, WebSocketServer } from "ws";
 import dotenv from "dotenv";
@@ -905,10 +906,10 @@ server.listen(PORT, () => {
         if (count > 0) console.log(`Cleaned up ${count} stale room(s).`);
     });
 
-    // Clean up stale rooms every 24 hours
-    setInterval(() => {
+    // Clean up stale rooms daily at 3am GMT+1
+    cron.schedule("0 3 * * *", () => {
         cleanupStaleRooms().then((count) => {
             if (count > 0) console.log(`Cleaned up ${count} stale room(s).`);
         });
-    }, 24 * 60 * 60 * 1000);
+    }, { timezone: "Europe/Berlin" });
 });

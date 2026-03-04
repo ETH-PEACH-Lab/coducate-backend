@@ -6,6 +6,7 @@
     "devDependencies": {
         "@types/cors": "^2.8.17",
         "@types/express": "^5.0.0",
+        "@types/node-cron": "^3.0.11",
         "@types/ws": "^8.5.12",
         "nodemon": "^3.1.10",
         "ts-node": "^10.9.2",
@@ -18,9 +19,10 @@
         "express-rate-limit": "^8.2.1",
         "knex": "^3.1.0",
         "mysql2": "^3.11.5",
+        "node-cron": "^4.2.1",
         "ws": "^8.18.0",
-        "zod": "^3.24.2",
         "y-websocket": "^2.0.4",
-        "yjs": "^13.6.20"
+        "yjs": "^13.6.20",
+        "zod": "^3.24.2"
     }
 }
