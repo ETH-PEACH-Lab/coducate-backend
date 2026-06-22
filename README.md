@@ -4,7 +4,7 @@ This is the backend server for Coducate. It provides WebSocket connections for r
 
 ## Getting Started
 
-For complete setup instructions, please refer to the [main project README](https://github.com/madbeamer/coducate-app/blob/57ff5802af539000dac73fc02fc84685cd986863/README.md).
+For complete setup instructions, please refer to the [main project README](https://github.com/ETH-PEACH-Lab/coducate-app/blob/master/README.md).
 
 ## Quick Start (Standalone)
 
