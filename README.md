@@ -24,4 +24,4 @@ The server will run on port 1234.
 
 ## License
 
-TBD
+[GNU Affero General Public License v3.0 or later](LICENSE)
